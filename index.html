@@ -20,11 +20,53 @@
 </head>
 <body class="booting">
 
+  <!-- Shown only when the app fails to start. A blank white screen tells you
+       nothing; this tells you what broke. Deliberately a CLASSIC script, not a
+       module, so it still runs when the module graph is what failed. -->
+  <div id="boot-error" class="boot-error" hidden></div>
+
   <div id="timer-bar" class="timer-bar" hidden></div>
 
   <main id="view" class="view"></main>
 
   <nav id="tabs" class="tabs" aria-label="Sections"></nav>
+
+  <script>
+  (function () {
+    var shown = false;
+    function fail(detail) {
+      if (shown) return;
+      shown = true;
+      document.body.classList.remove('booting');
+      var box = document.getElementById('boot-error');
+      box.hidden = false;
+      box.innerHTML =
+        '<h1>The app could not start</h1>' +
+        '<p>The page loaded but its JavaScript did not run. That is almost always ' +
+        'one file failing to download, not a bug in the app logic.</p>' +
+        '<pre></pre>' +
+        '<p class="hint">Check, in order: does <code>lib/dexie.mjs</code> open if you ' +
+        'visit it directly? Is there a <code>.nojekyll</code> file in your repo root? ' +
+        'Did every folder actually upload?</p>';
+      box.querySelector('pre').textContent = detail;
+    }
+    // Capture phase catches resource load failures (a script or stylesheet
+    // that 404s), which do not bubble.
+    window.addEventListener('error', function (e) {
+      fail((e.message || 'Failed to load a file') + (e.filename ? '\n' + e.filename : ''));
+    }, true);
+    window.addEventListener('unhandledrejection', function (e) {
+      fail(String((e.reason && e.reason.message) || e.reason));
+    });
+    // Backstop: some module failures report nothing at all.
+    setTimeout(function () {
+      if (document.body.classList.contains('booting')) {
+        fail('Timed out after 6 seconds with no error reported. Usually means a '
+           + 'module file returned 404 or was served with the wrong content type.');
+      }
+    }, 6000);
+  })();
+  </script>
 
   <script type="module" src="./js/app.js"></script>
 </body>

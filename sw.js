@@ -11,7 +11,7 @@
 // cache and is never touched by the service worker. Clearing the cache costs
 // you a re-download of about 100KB; it does not cost you a single set.
 
-const CACHE_VERSION = 'lift-v1';
+const CACHE_VERSION = 'lift-v2';
 
 const SHELL = [
   './',
@@ -27,7 +27,7 @@ const SHELL = [
   './js/views/food.js',
   './js/views/library.js',
   './js/views/settings.js',
-  './vendor/dexie.mjs',
+  './lib/dexie.mjs',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];

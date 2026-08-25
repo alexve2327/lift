@@ -21,9 +21,25 @@ are what make the app work offline, are blocked on plain HTTP.
 1. Make a new repository on GitHub. Public is fine, and it keeps Pages free.
 2. Upload everything in this folder to the root of the repo. Drag and drop
    works: `github.com/<you>/<repo>` → **Add file** → **Upload files**.
-3. Go to **Settings** → **Pages**.
-4. Under *Source*, pick **Deploy from a branch**, branch `main`, folder `/ (root)`.
-5. Wait about a minute. Your URL will be `https://<you>.github.io/<repo>/`.
+3. Create a file named `.nojekyll` in the repo root: **Add file** → **Create new
+   file**, type `.nojekyll` as the name, leave it empty, commit. Your computer
+   probably hides dotfiles, so this is more reliable than dragging it in.
+   See "Why `.nojekyll`" below for what it does.
+4. Go to **Settings** → **Pages**.
+5. Under *Source*, pick **Deploy from a branch**, branch `main`, folder `/ (root)`.
+6. Wait about a minute. Your URL will be `https://<you>.github.io/<repo>/`.
+
+#### Why `.nojekyll`
+
+GitHub Pages runs every repo through Jekyll, a blog engine, before serving it.
+Jekyll's default configuration silently **excludes a folder named `vendor`**,
+along with `node_modules`. If your app has one, those files 404 in production
+while working perfectly on your machine, and nothing tells you: you just get a
+blank screen.
+
+This project keeps its one dependency in `lib/` rather than `vendor/` so it
+survives even without the file, but `.nojekyll` turns the whole layer off and
+removes the class of bug entirely. Worth doing on any static site you host here.
 
 ### 2. Install it on the iPhone
 
@@ -90,7 +106,7 @@ index.html            page shell, iOS meta tags, safe-area setup
 app.webmanifest       name, icons, standalone display mode
 sw.js                 service worker: the offline cache
 css/app.css           one stylesheet, dark and light themes
-vendor/dexie.mjs      IndexedDB wrapper, vendored so it works offline
+lib/dexie.mjs      IndexedDB wrapper, vendored so it works offline
 js/
   app.js              router, tab bar, and the persistent rest-timer bar
   db.js               schema, indexes, and every read and write
