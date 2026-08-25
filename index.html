@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover lets the app paint into the notch and home-indicator
+     areas; the CSS then pads content back out with env(safe-area-inset-*).
+     Without it you get white bars top and bottom in standalone mode. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#12100e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f4f1" media="(prefers-color-scheme: light)">
+<!-- Tells iOS to run this without Safari's chrome once it's on the Home Screen. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lift">
+<title>Lift &amp; Intake</title>
+<link rel="manifest" href="./app.webmanifest">
+<link rel="apple-touch-icon" href="./icons/icon-180.png">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body class="booting">
+
+  <div id="timer-bar" class="timer-bar" hidden></div>
+
+  <main id="view" class="view"></main>
+
+  <nav id="tabs" class="tabs" aria-label="Sections"></nav>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
