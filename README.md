@@ -288,3 +288,26 @@ into a v3 database leaves old-shaped rows behind a current version number, and
 the upgrade never runs again to fix them. `normalizeImported()` re-applies the
 backfills after every import. Without it, exercises restored from an old backup
 have no targets, and editing one saves fields the others do not have.
+
+
+## v6: meal variants
+
+Same recipe, one component swapped. The bowl with fideo instead of rice.
+
+`variantOf` is a nullable meal id on the meal itself: no new table, no index, no
+schema bump. A meal without it is a base, a meal with it is a variant of that
+base, and a variant is a meal in every other respect, so logging, editing and
+deleting all work unchanged. Variants of a variant flatten to the original base,
+so the list stays two levels deep rather than growing a tree.
+
+**Save as a variant** copies a recipe and opens it. **Tap any ingredient** to
+replace it, keeping the amount. Deleting a base promotes its variants rather
+than orphaning them.
+
+Meal rows now show computed totals instead of the stored note. A variant copies
+its base's description, so a hand-written "732 kcal" summary is wrong the instant
+you swap something, and wrong in the most convincing way: it looks like data.
+Anything derivable gets derived.
+
+Cache version is `lift-v6`. `lift-v5` was spent on a broken upload, so the phone
+had already cached v4 files under that name and would never have refetched.

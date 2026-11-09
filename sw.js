@@ -11,7 +11,7 @@
 // cache and is never touched by the service worker. Clearing the cache costs
 // you a re-download of about 100KB; it does not cost you a single set.
 
-const CACHE_VERSION = 'lift-v5';
+const CACHE_VERSION = 'lift-v6';
 
 const SHELL = [
   './',

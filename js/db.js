@@ -488,6 +488,7 @@ export async function saveMeal({ id, name, notes = '', items }) {
     const existing = id ? await db.meals.get(id) : null;
     await db.meals.put({
       id: mealId, name, notes,
+      variantOf: existing?.variantOf ?? null,
       useCount: existing?.useCount ?? 0,
       isArchived: false,
       createdAt: existing?.createdAt ?? new Date(),
@@ -506,6 +507,9 @@ export async function deleteMeal(mealId) {
   await db.transaction('rw', db.meals, db.mealItems, db.foodEntries, async () => {
     await db.mealItems.where('mealId').equals(mealId).delete();
     await db.meals.delete(mealId);
+    // Variants of a deleted base become bases themselves rather than pointing
+    // at a meal that no longer exists.
+    await db.meals.filter((m) => m.variantOf === mealId).modify({ variantOf: null });
     // mealId is not indexed on foodEntries (we query by mealLogId, not mealId),
     // so this is a filter scan rather than a where(). Fine at this table size.
     await db.foodEntries.filter((e) => e.mealId === mealId).modify({ mealId: null });
@@ -701,4 +705,76 @@ export async function removeSet(setId) {
   if (!s) return;
   await db.setEntries.delete(setId);
   await db.sessions.update(s.sessionId, { editedAt: new Date() });
+}
+
+// ---------------------------------------------------------------------------
+// MEAL VARIANTS
+// ---------------------------------------------------------------------------
+// Same recipe, one component swapped: the bowl with fideo instead of rice.
+//
+// `variantOf` is a nullable meal id on the meal itself. No new table and no
+// index, so no schema version bump: a meal with no variantOf is a base, and a
+// meal with one is a variant of that base. Anything that reads meals already
+// works, because a variant IS a meal in every other respect.
+//
+// The alternative was modelling a recipe with swappable slots. That is the
+// "right" model and the wrong one here: it makes every meal carry machinery
+// that only two of them need, and swapping rice for fideo also changes the
+// amount, so the slots would not be interchangeable anyway.
+
+export async function duplicateMeal(mealId, newName) {
+  const src = await mealWithItems(mealId);
+  if (!src) throw new Error('meal not found');
+  const newId = uuid();
+  await db.transaction('rw', db.meals, db.mealItems, async () => {
+    await db.meals.add({
+      id: newId,
+      name: newName,
+      notes: src.notes,
+      // Variants of a variant flatten to the original base, so the list stays
+      // two levels deep instead of growing a tree nobody asked for.
+      variantOf: src.variantOf ?? src.id,
+      useCount: 0,
+      isArchived: false,
+      createdAt: new Date(),
+    });
+    await db.mealItems.bulkAdd(src.items.map((i, n) => ({
+      id: uuid(), mealId: newId, foodId: i.food.id, servings: i.servings, orderIndex: n,
+    })));
+  });
+  return newId;
+}
+
+/** Meals arranged as bases with their variants, each carrying live totals.
+ *
+ *  Totals are computed here rather than read from the meal's note. A variant
+ *  copies its base's description, so a hand-written "732 kcal" summary is wrong
+ *  the moment you swap an ingredient, and it is wrong in the most convincing
+ *  way: it looks like data. Anything derivable gets derived. */
+export async function mealGroups() {
+  const all = await mealLibrary();
+  const byId = new Map(all.map((m) => [m.id, m]));
+
+  const withTotals = async (m) => {
+    const full = await mealWithItems(m.id);
+    return { ...m, totals: mealTotals(full), itemCount: full.items.length };
+  };
+
+  const bases = all.filter((m) => !m.variantOf || !byId.has(m.variantOf));
+  const out = [];
+  for (const base of bases.sort((a, b) => (b.useCount ?? 0) - (a.useCount ?? 0))) {
+    const variants = all
+      .filter((m) => m.variantOf === base.id)
+      .sort((a, b) => (b.useCount ?? 0) - (a.useCount ?? 0));
+    out.push({
+      base: await withTotals(base),
+      variants: await Promise.all(variants.map(withTotals)),
+    });
+  }
+  return out;
+}
+
+/** Replace one ingredient across a meal, keeping the amount. */
+export async function swapMealItem(mealItemId, newFoodId) {
+  await db.mealItems.update(mealItemId, { foodId: newFoodId });
 }

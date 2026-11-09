@@ -12,7 +12,7 @@
 import {
   db, dayTotals, foodLibrary, logFood, editFoodEntry, findFoodByBarcode,
   mealLibrary, mealWithItems, mealTotals, saveMeal, deleteMeal, logMeal,
-  deleteMealLog, groupEntries,
+  deleteMealLog, groupEntries, mealGroups, duplicateMeal,
 } from '../db.js';
 import {
   el, screen, card, btn, empty, sheet, confirmSheet, toast, field,
@@ -33,7 +33,7 @@ const openGroups = new Set();
 export async function render(refresh) {
   const { entries, totals } = await dayTotals(viewDay);
   const { meals: logged, loose } = groupEntries(entries);
-  const library = await mealLibrary();
+  const groups = await mealGroups();
 
   const nav = el('div', { class: 'day-nav' },
     el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Previous day',
@@ -64,8 +64,11 @@ export async function render(refresh) {
     card(
       el('h2', { class: 'card-title' }, 'Your meals'),
       el('p', { class: 'muted small' }, 'One tap logs every ingredient. Edit any of them after.'),
-      library.length
-        ? el('ul', { class: 'list' }, library.map((m) => mealRow(m, refresh)))
+      groups.length
+        ? el('ul', { class: 'list' }, groups.flatMap((g) => [
+            mealRow(g.base, refresh, false),
+            ...g.variants.map((v) => mealRow(v, refresh, true)),
+          ]))
         : el('p', { class: 'muted' }, 'No meals yet. Build one below.')),
 
     el('div', { class: 'stack' },
@@ -164,11 +167,22 @@ function entrySheet(e, refresh) {
 // The meal library
 // ---------------------------------------------------------------------------
 
-function mealRow(m, refresh) {
-  return el('li', { class: 'list-row tappable', onclick: () => logMealSheet(m, refresh) },
+function mealRow(m, refresh, isVariant = false) {
+  return el('li', {
+    class: 'list-row tappable' + (isVariant ? ' variant' : ''),
+    onclick: () => logMealSheet(m, refresh),
+  },
     el('div', {},
-      el('div', { class: 'list-title' }, m.name),
-      el('div', { class: 'list-sub' }, m.notes || `logged ${m.useCount ?? 0}×`)),
+      el('div', { class: 'list-title' },
+        isVariant ? el('span', { class: 'variant-mark' }, '\u21b3') : null,
+        m.name),
+      // Live totals, not the stored note. The note describes the recipe it was
+      // written for; these describe the recipe as it is right now.
+      el('div', { class: 'list-sub' },
+        m.totals
+          ? `${r0(m.totals.kcal)} kcal \u00b7 ${r0(m.totals.protein)}P `
+            + `${r0(m.totals.carbs)}C ${r0(m.totals.fat)}F \u00b7 ${m.itemCount} ingredients`
+          : (m.notes || `logged ${m.useCount ?? 0}\u00d7`))),
     el('div', { class: 'entry-right' },
       el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Edit meal',
         onclick: (ev) => { ev.stopPropagation(); mealBuilder(m.id, refresh); } }, '⋯'),
@@ -256,10 +270,14 @@ function mealBuilder(mealId, refresh) {
           if (Number.isFinite(v)) { items[n].servings = v; redraw(); }
         });
         return el('div', { class: 'ingredient-row' },
-          el('div', { class: 'ing-name' },
+          el('button', {
+            class: 'ing-name swap', type: 'button',
+            onclick: () => pickFood((f) => { items[n] = { foodId: f.id, food: f, servings: items[n].servings }; redraw(); },
+              `Replace ${i.food.name}`),
+          },
             i.food.name,
             el('div', { class: 'ing-macros' },
-              `${r0(i.food.kcal)} kcal / ${i.food.servingUnit}`)),
+              `${r0(i.food.kcal)} kcal / ${i.food.servingUnit} \u00b7 tap to swap`)),
           amt,
           el('span', { class: 'ing-macros' }, i.food.servingUnit),
           el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ingredient',
@@ -268,9 +286,9 @@ function mealBuilder(mealId, refresh) {
     };
     redraw();
 
-    const addIngredient = async () => {
+    const pickFood = async (onPick, title = 'Add ingredient') => {
       const foods = await foodLibrary({ includeQuickAdds: true });
-      sheet('Add ingredient', (closePick) => {
+      sheet(title, (closePick) => {
         const search = textInput({ placeholder: 'Search foods', class: 'search' });
         const out = el('ul', { class: 'list' });
         const draw = () => {
@@ -280,10 +298,7 @@ function mealBuilder(mealId, refresh) {
           out.replaceChildren(...hits.slice(0, 40).map((f) =>
             el('li', {},
               el('button', { class: 'pick-row', type: 'button',
-                onclick: () => {
-                  items.push({ foodId: f.id, food: f, servings: 1 });
-                  closePick(); redraw();
-                } },
+                onclick: () => { closePick(); onPick(f); } },
                 el('span', { class: 'list-title' }, f.name),
                 el('span', { class: 'list-sub' },
                   `${r0(f.kcal)} kcal per ${f.servingQty} ${f.servingUnit}`)))));
@@ -291,10 +306,8 @@ function mealBuilder(mealId, refresh) {
             out.append(el('li', { class: 'pad' },
               btn(`Create "${search.value.trim()}"`, () => {
                 closePick();
-                foodFormSheet(null, null, (food) => {
-                  items.push({ foodId: food.id, food, servings: 1 });
-                  redraw();
-                }, { presetName: search.value.trim() });
+                foodFormSheet(null, null, (food) => onPick(food),
+                  { presetName: search.value.trim() });
               }, 'primary block')));
           }
         };
@@ -310,14 +323,27 @@ function mealBuilder(mealId, refresh) {
       el('div', { class: 'stack' },
         el('span', { class: 'field-label' }, 'Ingredients'),
         list,
-        btn('Add ingredient', addIngredient, 'block small'),
+        btn('Add ingredient',
+          () => pickFood((f) => { items.push({ foodId: f.id, food: f, servings: 1 }); redraw(); }),
+          'block small'),
         totalsLine),
+      existing
+        ? el('div', { class: 'stack' },
+            btn('Save as a variant', () => {
+              close();
+              variantSheet(existing, refresh);
+            }, 'block small'),
+            el('span', { class: 'field-hint' },
+              'Copies this recipe so you can swap a component. The bowl with fideo instead of '
+              + 'rice is a variant, not a new meal, and it lists under this one.'))
+        : null,
       el('div', { class: 'sheet-actions' },
         existing
           ? btn('Delete', () => {
               close();
               confirmSheet('Delete meal?',
-                'Days you already logged keep their entries and their numbers. Only the recipe goes.',
+                'Days you already logged keep their entries and their numbers. Only the recipe goes. '
+                + 'Any variants stay, as meals of their own.',
                 async () => { await deleteMeal(mealId); refresh(); }, 'Delete meal');
             }, 'danger')
           : btn('Cancel', close),
@@ -509,4 +535,32 @@ function quickAddSheet(refresh) {
 export async function lookupBarcode(code) {
   const mine = await findFoodByBarcode(code);
   return mine ? { food: mine, from: 'library' } : { food: null, from: 'none' };
+}
+
+/** Name the copy, then open it for editing. The swap is one tap from there:
+ *  tap the ingredient you want to change. */
+function variantSheet(base, refresh) {
+  sheet('Save as a variant', (close) => {
+    const name = textInput({
+      value: `${base.name} (variant)`,
+      placeholder: 'Dinner Bowl with fideo',
+    });
+    return [
+      el('p', { class: 'muted small' },
+        `Copies every ingredient from "${base.name}". Open the copy and tap any ingredient `
+        + 'to swap it for something else, keeping the amount.'),
+      field('Name', name),
+      el('div', { class: 'sheet-actions' },
+        btn('Cancel', close),
+        btn('Create', async () => {
+          const n = name.value.trim();
+          if (!n) return toast('Name it');
+          const id = await duplicateMeal(base.id, n);
+          close();
+          toast('Variant created');
+          refresh();
+          mealBuilder(id, refresh);
+        }, 'primary')),
+    ];
+  });
 }

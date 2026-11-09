@@ -518,3 +518,12 @@ input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 
 .session-head .list-title { font-size: 0.88rem; font-variant-numeric: tabular-nums; }
 .set-row.tappable { cursor: pointer; }
 .set-row .chev { margin-left: auto; }
+
+/* ---------- meal variants ---------- */
+.list-row.variant { padding-left: 14px; }
+.variant-mark { color: var(--muted); margin-right: 5px; font-size: 0.85em; }
+.ing-name.swap {
+  background: none; border: none; color: var(--text); font: inherit;
+  text-align: left; padding: 0; cursor: pointer; flex: 1;
+}
+.ing-name.swap:hover .ing-macros, .ing-name.swap:focus-visible .ing-macros { color: var(--accent); }
