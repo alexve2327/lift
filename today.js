@@ -12,6 +12,7 @@ import {
   numInput, textInput, segmented, stat,
 } from '../ui.js';
 import { uuid, fmtDuration, fmtClock, r1, e1rm } from '../util.js';
+import { exerciseSheet } from '../exercise-form.js';
 import * as timer from '../timer.js';
 
 export async function render(refresh) {
@@ -110,7 +111,7 @@ async function liveSession(session, refresh) {
         await db.sessions.delete(session.id);
         timer.stop();
         refresh();
-      });
+      }, 'Discard');
       return;
     }
     confirmSheet('Finish workout?', `${sets.length} sets, ${r1(totalVolume).toLocaleString()} lb of volume.`, async () => {
@@ -118,7 +119,7 @@ async function liveSession(session, refresh) {
       timer.stop();
       toast('Workout saved');
       refresh();
-    });
+    }, 'Finish', 'primary');
   };
 
   const blocks = [];
@@ -157,12 +158,38 @@ async function exerciseBlock({ exercise, programExercise, sets, session, setting
   // Pre-fill from the most recent set of this exercise in this session, else
   // from last time. You almost always repeat the previous set, so the fastest
   // correct default is "what you just did".
-  const seed = sets[sets.length - 1] ?? prior?.[prior.length - 1] ?? {};
+  const unilateral = !!exercise.isUnilateral;
+  // Default to whichever side you have done fewer of, so alternating L/R
+  // costs no taps at all.
+  const countL = sets.filter((s) => s.side === 'left').length;
+  const countR = sets.filter((s) => s.side === 'right').length;
+  let side = unilateral ? (countL <= countR ? 'left' : 'right') : null;
+
+  // Seed from the last set on the SAME side, so a left-side prefill never
+  // quietly carries over your right-side numbers.
+  const sameSide = unilateral ? sets.filter((s) => s.side === side) : sets;
+  const priorSame = unilateral && prior ? prior.filter((s) => s.side === side) : prior;
+  // Fall back to any prior set when there is none on this side. Sets logged
+  // before per-side tracking was turned on have no side, and without this the
+  // prefill would go blank the first time you use a newly unilateral exercise.
+  const seed = sameSide[sameSide.length - 1]
+    ?? priorSame?.[priorSame.length - 1]
+    ?? sets[sets.length - 1]
+    ?? prior?.[prior.length - 1]
+    ?? {};
 
   const weightIn = numInput({ value: seed.weight ?? '', placeholder: 'lb', class: 'set-in' });
   const repsIn   = numInput({ value: seed.reps ?? '', placeholder: 'reps', class: 'set-in' });
   const durIn    = numInput({ value: seed.durationSec ?? '', placeholder: 'sec', class: 'set-in' });
   let failure = false;
+
+  const sideBtn = el('button', {
+    type: 'button', class: 'side-btn on', 'aria-label': 'Side',
+    onclick: () => {
+      side = side === 'left' ? 'right' : 'left';
+      sideBtn.textContent = side === 'left' ? 'L' : 'R';
+    },
+  }, side === 'left' ? 'L' : 'R');
 
   const failBtn = el('button', {
     type: 'button', class: 'fail-btn', 'aria-pressed': 'false',
@@ -191,12 +218,13 @@ async function exerciseBlock({ exercise, programExercise, sets, session, setting
     await logSet({
       sessionId: session.id,
       exerciseId: exercise.id,
-      setIndex: sets.length + 1,
+      setIndex: (unilateral ? sets.filter((s) => s.side === side).length : sets.length) + 1,
       weight: Number.isFinite(weight) ? weight : null,
       reps: Number.isFinite(reps) ? reps : null,
       durationSec: Number.isFinite(durationSec) ? durationSec : null,
       toFailure: failure,
       restSecActual: restActual,
+      side: unilateral ? side : null,
     });
 
     timer.unlockAudio();
@@ -204,20 +232,36 @@ async function exerciseBlock({ exercise, programExercise, sets, session, setting
     refresh();
   };
 
-  const target = programExercise
-    ? `${programExercise.targetSets} × ${programExercise.targetRepsLow}-${programExercise.targetRepsHigh}`
-    : null;
+  // Targets come from the exercise now, so the pill matches whatever you set in
+  // the edit sheet, program day or not.
+  const tSets = exercise.targetSets ?? programExercise?.targetSets ?? null;
+  const tLow = exercise.targetRepsLow ?? 8;
+  const tHigh = exercise.targetRepsHigh ?? 12;
+  const target = tSets ? `${tSets} \u00d7 ${tLow}-${tHigh}` : `${tLow}-${tHigh}`;
 
+  const fmtSet = (s) => (kind === 'duration' ? `${s.durationSec}s`
+    : kind === 'bodyweight_reps' ? `${s.reps}` : `${r1(s.weight)}×${s.reps}`);
+  const priorL = prior?.filter((s) => s.side === 'left') ?? [];
+  const priorR = prior?.filter((s) => s.side === 'right') ?? [];
   const priorLabel = prior?.length
-    ? 'Last: ' + prior.map(s => kind === 'duration'
-        ? `${s.durationSec}s`
-        : kind === 'bodyweight_reps' ? `${s.reps}` : `${r1(s.weight)}×${s.reps}`).join(', ')
+    ? (unilateral && (priorL.length || priorR.length)
+        ? 'Last: L ' + (priorL.map(fmtSet).join(', ') || '\u2014')
+          + '  \u00b7  R ' + (priorR.map(fmtSet).join(', ') || '\u2014')
+        // Unilateral but no sided history yet: show the unsided sets rather
+        // than two empty lists.
+        : 'Last: ' + prior.map(fmtSet).join(', '))
     : 'First time logging this';
 
   return card(
     el('div', { class: 'ex-head' },
       el('div', {},
-        el('h2', { class: 'card-title' }, exercise.name),
+        // Tapping the name edits the exercise in place. Going to Library,
+        // finding it, editing it and coming back was four screens to fix a
+        // typo or flip the unilateral switch mid-workout.
+        el('button', {
+          class: 'card-title editable', type: 'button',
+          onclick: () => exerciseSheet(exercise, refresh, { allowArchive: false }),
+        }, exercise.name, el('span', { class: 'chev' }, '\u270e')),
         el('div', { class: 'list-sub' }, priorLabel)),
       target ? el('span', { class: 'pill' }, target) : null),
 
@@ -225,7 +269,9 @@ async function exerciseBlock({ exercise, programExercise, sets, session, setting
       sets.map(s => setRow(s, kind, refresh))) : null,
 
     el('div', { class: 'set-form' },
-      el('span', { class: 'set-num' }, String(sets.length + 1)),
+      el('span', { class: 'set-num' },
+        String((unilateral ? Math.max(countL, countR) : sets.length) + 1)),
+      unilateral ? sideBtn : null,
       kind === 'weight_reps' ? weightIn : null,
       kind === 'duration' ? durIn : repsIn,
       failBtn,
@@ -242,6 +288,7 @@ function setRow(s, kind, refresh) {
 
   return el('li', { class: 'set-row' },
     el('span', { class: 'set-num' }, String(s.setIndex)),
+    s.side ? el('span', { class: 'tag side' }, s.side === 'left' ? 'L' : 'R') : null,
     el('span', { class: 'set-detail' }, detail),
     s.toFailure ? el('span', { class: 'tag fail' }, 'failure') : null,
     est ? el('span', { class: 'set-est' }, `e1RM ${r1(est)}`) : null,
@@ -275,7 +322,7 @@ function editSheet(s, kind, refresh) {
           confirmSheet('Delete set?', 'This removes it from your history.', async () => {
             await db.setEntries.delete(s.id);
             refresh();
-          });
+          }, 'Delete');
         }, 'danger'),
         btn('Save', async () => {
           await editSet(s.id, {

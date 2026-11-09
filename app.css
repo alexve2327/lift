@@ -4,16 +4,16 @@
    two themes stay in sync; nothing is defined only inside the media query. */
 
 :root {
-  --bg: #12100e;
-  --surface: #1b1815;
-  --surface-2: #241f1a;
-  --text: #f0ebe3;
-  --muted: #968c7e;
-  --rule: #2e2822;
-  --accent: #e0a020;
-  --accent-ink: #12100e;
-  --danger: #e0685a;
-  --good: #6fc08a;
+  --bg: #0f120e;
+  --surface: #181c15;
+  --surface-2: #212619;
+  --text: #e9ede4;
+  --muted: #8d9683;
+  --rule: #2a3123;
+  --accent: #a8e05f;
+  --accent-ink: #10140c;
+  --danger: #e8705f;
+  --good: #64c98a;
 
   --pad: 16px;
   --radius: 12px;
@@ -27,15 +27,15 @@
 
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f6f4f1;
+    --bg: #f4f6f0;
     --surface: #ffffff;
-    --surface-2: #efebe5;
-    --text: #1a1714;
-    --muted: #6e6558;
-    --rule: #e2dcd3;
-    --accent: #a96a05;
+    --surface-2: #eaeee2;
+    --text: #161a12;
+    --muted: #646b59;
+    --rule: #dfe4d5;
+    --accent: #4c7a14;
     --accent-ink: #ffffff;
-    --danger: #b4392b;
+    --danger: #b03a2b;
     --good: #2f7a4c;
     color-scheme: light;
   }
@@ -58,8 +58,31 @@ body {
   flex-direction: column;
 }
 
-body.booting > * { opacity: 0; }
+/* Hide the shell until the first render, so you never see an empty frame.
+   Scoped to the two containers rather than `body > *`: an earlier version hid
+   every child of body, which meant any JavaScript failure produced a silent
+   blank white screen with no way to tell what went wrong. */
+body.booting > .view,
+body.booting > .tabs { opacity: 0; }
 body.locked { overflow: hidden; }
+
+.boot-error {
+  max-width: 560px; margin: 0 auto;
+  padding: calc(env(safe-area-inset-top) + 32px) var(--pad) 40px;
+}
+.boot-error h1 { font-size: 1.35rem; margin: 0 0 10px; letter-spacing: -0.02em; }
+.boot-error p { color: var(--muted); margin: 0 0 12px; font-size: 0.92rem; }
+.boot-error pre {
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 10px; padding: 12px; overflow-x: auto;
+  font-family: var(--mono); font-size: 0.76rem; color: var(--danger);
+  white-space: pre-wrap; word-break: break-word; margin: 0 0 12px;
+}
+.boot-error .hint { font-size: 0.84rem; }
+.boot-error code {
+  font-family: var(--mono); font-size: 0.85em;
+  background: var(--surface-2); padding: 1px 5px; border-radius: 4px;
+}
 
 /* ---------- layout ---------- */
 
@@ -404,3 +427,94 @@ input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 
   animation: rise 0.18s ease;
   pointer-events: none;
 }
+
+/* ---------- charts ---------- */
+
+.chart { display: flex; flex-direction: column; gap: 6px; }
+.chart-scroll { width: 100%; }
+.chart-scroll svg { display: block; width: 100%; height: 190px; }
+.chart-empty { padding: 20px 0; text-align: center; }
+
+.c-grid   { stroke: var(--rule); stroke-width: 1; }
+.c-axis   { fill: var(--muted); font-size: 10px; font-family: var(--sans); }
+.c-band   { fill: var(--accent); opacity: 0.1; }
+.c-rule   { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.7; }
+.c-rule-label { fill: var(--muted); font-size: 9.5px; font-family: var(--sans); }
+.c-line   { fill: none; stroke: var(--accent); stroke-width: 2;
+            stroke-linejoin: round; stroke-linecap: round;
+            vector-effect: non-scaling-stroke; }
+.c-line.dashed { stroke-dasharray: 5 4; }
+.c-dot    { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
+.c-dot.diamond { stroke-width: 1.5; }
+.c-pt.hollow .c-dot { fill: var(--surface); stroke: var(--danger); stroke-width: 2; }
+.c-ptlabel { fill: var(--muted); font-size: 9.5px; font-family: var(--sans);
+             font-variant-numeric: tabular-nums; }
+.c-hit    { fill: transparent; cursor: pointer; }
+.c-pt.on .c-dot { stroke: var(--text); stroke-width: 2.5; }
+
+.chart-readout {
+  font-size: 0.78rem; color: var(--muted); min-height: 1.2em;
+  font-variant-numeric: tabular-nums; text-align: center;
+}
+
+/* ---------- progress picker ---------- */
+
+.btn.picker {
+  justify-content: space-between; font-size: 1rem; font-weight: 650;
+  background: var(--surface); text-align: left;
+}
+.btn.picker::after { content: '▾'; color: var(--muted); font-size: 0.85rem; }
+.pick-row.on { color: var(--accent); }
+.card-title.warn { color: var(--danger); }
+.pill.good { background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); }
+
+/* ---------- side (L/R) toggle in the set form ---------- */
+
+.side-btn {
+  font: inherit; font-weight: 700; font-size: 0.8rem;
+  min-width: 38px; min-height: var(--tap); padding: 0 8px;
+  border-radius: 10px; border: 1px solid var(--rule);
+  background: var(--surface-2); color: var(--muted); cursor: pointer; flex-shrink: 0;
+}
+.side-btn.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.tag.side { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+
+/* ---------- meals ---------- */
+
+.meal-group { border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.meal-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 11px 12px; background: var(--surface-2);
+  border: none; font: inherit; color: var(--text); cursor: pointer; text-align: left;
+}
+.meal-head .list-title { flex: 1; }
+.meal-caret { color: var(--muted); font-size: 0.8rem; transition: transform 0.15s; }
+.meal-group.open .meal-caret { transform: rotate(90deg); }
+.meal-items { padding: 0 12px; }
+.meal-items .list-row { padding: 9px 0; }
+.meal-kcal { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 0.95rem; }
+.ingredient-row { display: flex; align-items: center; gap: 8px; }
+.ingredient-row .ing-name { flex: 1; font-size: 0.88rem; }
+.ingredient-row input { width: 76px; text-align: center; min-height: 40px; padding: 6px; }
+.ing-macros { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ---------- misc additions ---------- */
+
+.inline-edit {
+  background: none; border: none; color: var(--muted); font: inherit;
+  font-size: 0.8rem; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.quick-row { display: flex; gap: 8px; align-items: stretch; }
+.quick-row input { flex: 1; }
+.quick-row .btn { flex-shrink: 0; }
+.trend-note { font-size: 0.8rem; color: var(--muted); }
+.trend-note b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ---------- session history list ---------- */
+.session-block { border-top: 1px solid var(--rule); padding-top: 8px; }
+.session-block:first-child { border-top: none; padding-top: 0; }
+.session-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+.session-head .list-title { font-size: 0.88rem; font-variant-numeric: tabular-nums; }
+.set-row.tappable { cursor: pointer; }
+.set-row .chev { margin-left: auto; }

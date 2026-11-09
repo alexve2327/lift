@@ -229,3 +229,62 @@ weigh-in is water; the slope is the signal.
 **Lime, not amber.** Both themes re-derived, with neutrals shifted cool-green to
 match and every pair contrast-checked (light accent 5.1:1 on white, dark accent
 12.1:1 on the dark ground).
+
+---
+
+## v5: repairing history
+
+Until v5 there was no way to look at a finished workout, let alone fix a number
+in it. A typo logged in October was permanent. Progress now carries a **Sessions**
+list under the charts: every past set is tappable, correctable and deletable, and
+every change stamps `editedAt` so a corrected row keeps an "edited" tag and never
+passes as something logged at the time.
+
+The two chart warnings became actions rather than complaints:
+
+**Swap weight and reps.** Shows exactly which sets change and what each becomes,
+then does it on your confirmation. Still never automatic.
+
+**Split at a date.** For an exercise renamed in place, which leaves two different
+movements behind one id and a meaningless line between them. Splitting moves
+every set on or before the break to a new exercise you name; the current one
+keeps its recent sets, because the name describes what you do now. The split-off
+exercise is archived, so it stays out of pickers and keeps its charts.
+
+Order matters when a history has both problems: **swap first, then split.** A
+transposed entry (8 lb × 90) looks like a weight discontinuity on its own, so
+fixing it first removes a phantom split point.
+
+
+### Targets moved onto the Exercise
+
+v0.1 put rep targets on ProgramExercise, the day+exercise pairing, so one lift
+could be 5x5 on a heavy day and 3x12 on a volume day. That was right in the
+abstract and wrong in practice: there is one program, each exercise appears
+once, and changing a rep range meant opening the program builder, which nobody
+ever did. The result was all 26 exercises sitting on the 8-12 default, so
+"ready to bump" could only fire at 12 and no compound ever lit up.
+
+The rep range is also a property of the movement rather than the day. "Bumps at
+10" is roughly what makes something a compound. So `targetSets`,
+`targetRepsLow`, `targetRepsHigh` and `bumpAfterSets` now live on the Exercise
+and are edited wherever you can see it, including by tapping its name
+mid-workout. ProgramExercise keeps rest and ordering, which genuinely are
+per-day. Schema version 3 backfills from whatever the program had.
+
+### The bump rule is about your first sets
+
+The old check compared the day's BEST set against the top of the range, so one
+good set turned it green. The rule is the first N sets at the working weight all
+reaching the top, default 2 and editable per exercise. A session of 8, 12, 10, 9
+is not ready; 10, 10, 10 against an 8-10 target is. The card now states the rule
+and your last session's reps in order, so a grey pill explains itself.
+
+### Importing an old backup normalizes it
+
+IndexedDB upgrades run once, when the database opens. A restore happens long
+after and writes rows in whatever shape the backup had, so a v1 export dropped
+into a v3 database leaves old-shaped rows behind a current version number, and
+the upgrade never runs again to fix them. `normalizeImported()` re-applies the
+backfills after every import. Without it, exercises restored from an old backup
+have no targets, and editing one saves fields the others do not have.

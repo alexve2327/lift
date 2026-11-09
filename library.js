@@ -15,6 +15,7 @@ import {
 } from '../ui.js';
 import { uuid, r0 } from '../util.js';
 import { exercisePicker } from './today.js';
+import { exerciseSheet, TRACKING } from '../exercise-form.js';
 import { foodFormSheet } from './food.js';
 
 let tab = 'exercises';
@@ -58,64 +59,12 @@ async function exercisesTab(refresh) {
               el('div', {},
                 el('div', { class: 'list-title' }, e.name),
                 el('div', { class: 'list-sub' },
-                  [e.equipment, TRACKING[e.trackingType]].filter(Boolean).join(' · '))),
+                  [e.equipment, TRACKING[e.trackingType], e.isUnilateral ? 'per side' : null]
+                    .filter(Boolean).join(' · '))),
               el('span', { class: 'chev' }, '›')))))),
     btn('New exercise', () => exerciseSheet(null, refresh), 'primary block'));
 }
 
-const TRACKING = {
-  weight_reps: 'weight × reps',
-  bodyweight_reps: 'bodyweight reps',
-  duration: 'time',
-  distance: 'distance',
-};
-
-function exerciseSheet(existing, refresh) {
-  sheet(existing ? existing.name : 'New exercise', (close) => {
-    const e = existing ?? {};
-    const name = textInput({ value: e.name ?? '', placeholder: 'Barbell Back Squat' });
-    const group = textInput({ value: e.muscleGroup ?? '', placeholder: 'Legs' });
-    const equip = textInput({ value: e.equipment ?? '', placeholder: 'Barbell' });
-    const notes = el('textarea', { rows: 2, placeholder: 'Setup cues, pin heights, seat position' },
-      e.notes ?? '');
-    let tracking = e.trackingType ?? 'weight_reps';
-    const seg = el('div', {});
-    const drawSeg = () => seg.replaceChildren(segmented(
-      Object.entries(TRACKING).map(([value, label]) => ({ value, label })),
-      tracking, (v) => { tracking = v; drawSeg(); }));
-    drawSeg();
-
-    return [
-      field('Name', name),
-      el('div', { class: 'grid-2' }, field('Muscle group', group), field('Equipment', equip)),
-      el('div', { class: 'stack' },
-        el('span', { class: 'field-label' }, 'Tracked as'), seg,
-        el('span', { class: 'field-hint' },
-          'Not everything is weight times reps. Planks and pull-ups need different fields.')),
-      field('Notes', notes),
-      el('div', { class: 'sheet-actions' },
-        existing ? btn('Archive', () => {
-          close();
-          confirmSheet('Archive exercise?',
-            'It disappears from pickers. Your past sets keep it, because deleting it outright would orphan them.',
-            async () => { await db.exercises.update(existing.id, { isArchived: true }); refresh(); });
-        }, 'danger') : btn('Cancel', close),
-        btn('Save', async () => {
-          if (!name.value.trim()) return toast('Name it');
-          await db.exercises.put({
-            id: e.id ?? uuid(),
-            name: name.value.trim(),
-            muscleGroup: group.value.trim(),
-            equipment: equip.value.trim(),
-            trackingType: tracking,
-            notes: notes.value,
-            isArchived: false,
-          });
-          close(); refresh();
-        }, 'primary')),
-    ];
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Programs
@@ -206,7 +155,8 @@ async function programDetail(programId, refresh) {
       btn('Edit program details', () => programSheet(program, refresh), 'block'),
       btn('Delete program', () => confirmSheet('Delete program?',
         'Your training history is kept. Past sessions keep the day name they were recorded with and just lose the link.',
-        async () => { await deleteProgram(programId); openProgramId = null; refresh(); }), 'danger block')));
+        async () => { await deleteProgram(programId); openProgramId = null; refresh(); },
+        'Delete program'), 'danger block')));
 }
 
 function dayCard(day, byId, refresh) {
@@ -239,7 +189,7 @@ function dayCard(day, byId, refresh) {
             await db.programDays.delete(day.id);
             await db.sessions.where('programDayId').equals(day.id).modify({ programDayId: null });
             refresh();
-          }) }, '×')),
+          }, 'Delete day') }, '×')),
 
     day.exercises.length
       ? el('ul', { class: 'list' }, day.exercises.map(pe =>
@@ -247,7 +197,7 @@ function dayCard(day, byId, refresh) {
             el('div', {},
               el('div', { class: 'list-title' }, byId[pe.exerciseId]?.name ?? 'Unknown'),
               el('div', { class: 'list-sub' },
-                `${pe.targetSets} × ${pe.targetRepsLow}-${pe.targetRepsHigh} · rest ${pe.targetRestSec}s`
+                `rest ${pe.targetRestSec}s \u00b7 targets on the exercise`
                 + (pe.notes ? ` · ${pe.notes}` : ''))),
             el('span', { class: 'chev' }, '›'))))
       : el('p', { class: 'muted small' }, 'No exercises yet.'),
@@ -293,7 +243,7 @@ function targetSheet(pe, refresh) {
         btn('Remove', () => {
           close();
           confirmSheet('Remove exercise?', 'Only from this program day. Your logged sets are untouched.',
-            async () => { await db.programExercises.delete(pe.id); refresh(); });
+            async () => { await db.programExercises.delete(pe.id); refresh(); }, 'Remove');
         }, 'danger'),
         btn('Save', async () => {
           await db.programExercises.update(pe.id, {
