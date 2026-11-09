@@ -11,9 +11,13 @@
 // hides the thing you actually want to see. One point per day per exercise,
 // chosen as the day's working weight, is the signal.
 
-import { db, historyFor, exerciseLibrary } from '../db.js';
 import {
-  el, screen, card, btn, empty, sheet, textInput, segmented, stat, toast,
+  db, historyFor, exerciseLibrary, splitExerciseHistory, swapWeightReps,
+  sessionsForExercise, correctSet, removeSet,
+} from '../db.js';
+import {
+  el, screen, card, btn, empty, sheet, confirmSheet, field, numInput,
+  textInput, segmented, stat, toast,
 } from '../ui.js';
 import { r1, toDayKey } from '../util.js';
 import { lineChart } from '../chart.js';
@@ -104,14 +108,23 @@ export function dailyPoints(sets) {
     for (const [w, n] of counts) {
       if (!best || n > best.n || (n === best.n && w > best.w)) best = { w, n };
     }
-    const atWeight = rows.filter((r) => r.weight === best.w);
+    const atWeight = rows.filter((r) => r.weight === best.w)
+      .sort((a, b) => a.setIndex - b.setIndex
+        || +new Date(a.completedAt) - +new Date(b.completedAt));
     const bestReps = Math.max(...atWeight.map((r) => r.reps));
+    const sideCounts = { left: 0, right: 0, none: 0 };
+    for (const r of rows) sideCounts[r.side === 'left' ? 'left' : r.side === 'right' ? 'right' : 'none']++;
     out.push({
       day,
       x: new Date(day + 'T12:00:00'),
       weight: best.w,
       reps: bestReps,
+      // Reps in the order you actually did them, at the working weight. The
+      // bump rule is about your FIRST sets, so order is the whole point:
+      // 8 then 12 is not the same session as 12 then 8.
+      repsAtWeight: atWeight.map((r) => r.reps),
       sets: rows.length,
+      sideCounts,
       setsAtWeight: best.n,
       toFailure: atWeight.some((r) => r.toFailure),
       // Transposed-entry detection: his example was 7 lb x 100 reps. Flag it,
@@ -123,15 +136,15 @@ export function dailyPoints(sets) {
   return out;
 }
 
-async function repRange(exerciseId) {
-  // filter(), not where(): `exerciseId` is not an index on programExercises
-  // (the indexes are id, programDayId and [programDayId+orderIndex]), and
-  // where() on an unindexed field throws rather than falling back to a scan.
-  // The table holds a couple of dozen rows, so a scan is free.
-  const pes = await db.programExercises.filter((pe) => pe.exerciseId === exerciseId).toArray();
-  if (!pes.length) return { low: 8, high: 12, sets: null };
-  const pe = pes[pes.length - 1];
-  return { low: pe.targetRepsLow, high: pe.targetRepsHigh, sets: pe.targetSets };
+/** Targets come from the Exercise now, which is the one place you can edit them
+ *  (including mid-workout). ProgramExercise keeps rest and ordering. */
+function repRange(exercise) {
+  return {
+    low: exercise.targetRepsLow ?? 8,
+    high: exercise.targetRepsHigh ?? 12,
+    sets: exercise.targetSets ?? null,
+    bumpAfter: Math.max(1, exercise.bumpAfterSets ?? 2),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -140,12 +153,13 @@ async function repRange(exerciseId) {
 
 async function charts(exercise, refresh) {
   const all = await historyFor(exercise.id);
-  const range = await repRange(exercise.id);
+  const range = repRange(exercise);
 
   const sideOptions = exercise.isUnilateral
     ? [{ value: 'both', label: 'Both' }, { value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }]
     : null;
 
+  const unsidedCount = exercise.isUnilateral ? all.filter((s) => !s.side).length : 0;
   const sets = exercise.isUnilateral && sideView !== 'both'
     ? all.filter((s) => s.side === sideView)
     : all;
@@ -182,10 +196,18 @@ async function charts(exercise, refresh) {
   const first = pts[0];
   const best = pts.reduce((a, p) => (p.weight > a.weight ? p : a), pts[0]);
 
-  // Double progression: ready to bump when the working sets hit the top of the
-  // range. His rule is the first two sets, which we can only approximate from a
-  // day point, so this reads the best set at the working weight and says so.
-  const ready = latest.reps >= range.high;
+  // Double progression, done properly: ready when the FIRST `bumpAfter` sets at
+  // the working weight all reach the top of the range. The previous version
+  // compared the day's BEST set against the top, which fires on one good set
+  // and is not the rule.
+  const firstN = (latest.repsAtWeight ?? []).slice(0, range.bumpAfter);
+  const ready = firstN.length >= range.bumpAfter && firstN.every((r) => r >= range.high);
+  const hitting = firstN.filter((r) => r >= range.high).length;
+  const bumpNote = ready
+    ? `First ${range.bumpAfter} sets at ${r1(latest.weight)} lb hit ${range.high}. Add weight.`
+    : `Bumps when the first ${range.bumpAfter} sets at the working weight reach ${range.high}. `
+      + `Last session at ${r1(latest.weight)} lb: ${(latest.repsAtWeight ?? []).join(', ') || 'none'} `
+      + `(${hitting} of ${range.bumpAfter}).`;
 
   const head = card(
     el('div', { class: 'ex-head' },
@@ -195,24 +217,46 @@ async function charts(exercise, refresh) {
           [exercise.muscleGroup, range.sets ? `target ${range.sets} sets` : null,
             `${range.low}-${range.high} reps`].filter(Boolean).join(' · '))),
       ready ? el('span', { class: 'pill good' }, 'ready to bump') : null),
+    el('p', { class: 'muted small' }, bumpNote),
     el('div', { class: 'stat-row' },
       stat(r1(latest.weight) + ' lb', 'current'),
       stat(String(latest.reps), 'best reps'),
       stat((latest.weight - first.weight >= 0 ? '+' : '') + r1(latest.weight - first.weight), 'lb since start'),
       stat(String(pts.length), 'sessions')),
     sideOptions
-      ? segmented(sideOptions, sideView, (v) => { sideView = v; refresh(); })
+      ? el('div', { class: 'stack' },
+          segmented(sideOptions, sideView, (v) => { sideView = v; refresh(); }),
+          unsidedCount
+            ? el('span', { class: 'field-hint' },
+                `${unsidedCount} older set${unsidedCount === 1 ? '' : 's'} were logged before `
+                + 'per-side tracking was on, so they carry no side. They show under Both and are '
+                + 'left out of Left and Right. Nothing was lost or changed.')
+            : null)
       : null);
 
   const cards = [head];
 
   if (suspects.length) {
+    const suspectDays = suspects.map((p) => p.day);
+    const affected = sets.filter((s) =>
+      suspectDays.includes(toDayKey(new Date(s.completedAt))) && s.weight < 20 && s.reps > 30);
     cards.push(card(
-      el('h2', { class: 'card-title warn' }, `${suspects.length} point${suspects.length > 1 ? 's' : ''} look transposed`),
+      el('h2', { class: 'card-title warn' },
+        `${suspects.length} day${suspects.length > 1 ? 's' : ''} look transposed`),
       el('p', { class: 'muted small' },
         'Weight and reps look swapped on '
-        + suspects.map((p) => `${p.day} (${r1(p.weight)} lb × ${p.reps})`).join(', ')
-        + '. I have left the data alone rather than guessing. Fix it in the workout log and the chart follows.'),
+        + suspects.map((p) => `${p.day} (${r1(p.weight)} lb \u00d7 ${p.reps})`).join(', ')
+        + `. ${affected.length} set${affected.length > 1 ? 's' : ''} affected. `
+        + 'Nothing changes until you say so.'),
+      btn(`Swap weight and reps on ${affected.length} set${affected.length > 1 ? 's' : ''}`, () => {
+        confirmSheet('Swap weight and reps?',
+          affected.map((s) => `${r1(s.weight)} lb \u00d7 ${s.reps} becomes ${s.reps} lb \u00d7 ${r1(s.weight)}`).join(';  '),
+          async () => {
+            const n = await swapWeightReps(affected.map((s) => s.id));
+            toast(`${n} sets corrected`);
+            refresh();
+          }, 'Swap them', 'primary');
+      }, 'block small'),
     ));
   }
 
@@ -223,9 +267,13 @@ async function charts(exercise, refresh) {
       el('p', { class: 'muted small' },
         'The working weight jumps by more than a factor of two at '
         + breaks.map((b) => `${b.from.day} (${r1(b.from.weight)} lb) → ${b.to.day} (${r1(b.to.weight)} lb)`).join(', ')
-        + '. That usually means this exercise was renamed in place and the earlier points belong '
-        + 'to a different movement. I cannot prove it from one backup, so the line is drawn as '
-        + 'logged. If it was a rename, make a new exercise for the current one and the chart splits cleanly.'),
+        + '. That usually means this exercise was renamed in place, so the earlier points belong '
+        + 'to a different movement. I cannot prove that, so nothing changes until you decide.'),
+      ...breaks.map((b) => {
+        const moving = sets.filter((s) => toDayKey(new Date(s.completedAt)) <= b.from.day);
+        return btn(`Split at ${b.from.day} (${moving.length} sets move)`,
+          () => splitSheet(exercise, b, moving.length, refresh), 'block small');
+      }),
     ));
   }
 
@@ -238,9 +286,21 @@ async function charts(exercise, refresh) {
         x: p.x, y: p.weight,
         mark: p.increase ? 'diamond' : null,
         hollow: p.suspect,
-        label: `${p.day} · ${r1(p.weight)} lb · ${p.sets} set${p.sets > 1 ? 's' : ''} · best ${p.reps} reps`,
+        label: `${p.day} \u00b7 ${r1(p.weight)} lb \u00b7 `
+          + (p.sideCounts.left && p.sideCounts.right
+              ? `${p.sideCounts.left}L/${p.sideCounts.right}R`
+              : `${p.sets} set${p.sets > 1 ? 's' : ''}`)
+          + ` \u00b7 best ${p.reps} reps`,
       })),
-      pointLabel: (p, i) => String(pts[i].sets),
+      pointLabel: (p, i) => {
+        const c = pts[i].sideCounts;
+        // On a unilateral exercise viewed as Both, the raw row count double
+        // counts: 4 sets per side is 8 rows. Show what you actually did.
+        if (exercise.isUnilateral && sideView === 'both' && c.left && c.left === c.right) {
+          return String(c.left);
+        }
+        return String(pts[i].sets);
+      },
       yLabel: 'lb',
     })));
 
@@ -266,7 +326,123 @@ async function charts(exercise, refresh) {
   cards.push(card(
     el('h2', { class: 'card-title' }, 'Heaviest day'),
     el('p', { class: 'muted small' },
-      `${r1(best.weight)} lb × ${best.reps} on ${best.day}.`)));
+      `${r1(best.weight)} lb \u00d7 ${best.reps} on ${best.day}.`)));
+
+  cards.push(await sessionList(exercise, refresh));
 
   return cards;
+}
+
+// ---------------------------------------------------------------------------
+// Past sessions, and correcting them
+// ---------------------------------------------------------------------------
+// This is the piece that was missing. Until now there was no way to look at a
+// finished workout at all, let alone fix a number in it, so a typo logged in
+// October was permanent.
+
+let showAllSessions = false;
+
+async function sessionList(exercise, refresh) {
+  const sessions = await sessionsForExercise(exercise.id);
+  const shown = showAllSessions ? sessions : sessions.slice(0, 6);
+
+  return card(
+    el('h2', { class: 'card-title' }, 'Sessions'),
+    el('p', { class: 'muted small' }, 'Tap any set to correct or delete it.'),
+    el('div', { class: 'stack' }, shown.map((s) =>
+      el('div', { class: 'session-block' },
+        el('div', { class: 'session-head' },
+          el('span', { class: 'list-title' }, s.dayKey),
+          el('span', { class: 'list-sub' }, s.dayName)),
+        el('ul', { class: 'set-list' }, s.sets.map((x) => pastSetRow(x, exercise, refresh)))))),
+    sessions.length > 6
+      ? btn(showAllSessions ? 'Show fewer' : `Show all ${sessions.length} sessions`,
+          () => { showAllSessions = !showAllSessions; refresh(); }, 'block small')
+      : null);
+}
+
+function pastSetRow(s, exercise, refresh) {
+  const kind = exercise.trackingType ?? 'weight_reps';
+  const detail = kind === 'duration' ? `${s.durationSec}s`
+    : kind === 'bodyweight_reps' ? `${s.reps} reps`
+    : `${r1(s.weight)} lb \u00d7 ${s.reps}`;
+  return el('li', { class: 'set-row tappable', onclick: () => pastSetSheet(s, exercise, refresh) },
+    el('span', { class: 'set-num' }, String(s.setIndex)),
+    s.side ? el('span', { class: 'tag side' }, s.side === 'left' ? 'L' : 'R') : null,
+    el('span', { class: 'set-detail' }, detail),
+    s.toFailure ? el('span', { class: 'tag fail' }, 'failure') : null,
+    s.editedAt ? el('span', { class: 'tag edited' }, 'edited') : null,
+    el('span', { class: 'chev' }, '\u203a'));
+}
+
+function pastSetSheet(s, exercise, refresh) {
+  const kind = exercise.trackingType ?? 'weight_reps';
+  sheet(`${toDayKey(new Date(s.completedAt))} \u00b7 set ${s.setIndex}`, (close) => {
+    const w = numInput({ value: s.weight ?? '' });
+    const r = numInput({ value: s.reps ?? '' });
+    const d = numInput({ value: s.durationSec ?? '' });
+    let fail = s.toFailure;
+    const f = el('button', {
+      type: 'button', class: 'fail-btn wide' + (fail ? ' on' : ''),
+      onclick: () => { fail = !fail; f.classList.toggle('on', fail); },
+    }, 'To failure');
+
+    return [
+      el('p', { class: 'muted small' },
+        'Corrections are allowed and are marked. The row keeps an edited tag afterwards, so a '
+        + 'fixed number never passes as something you logged at the time.'),
+      kind === 'weight_reps' ? field('Weight (lb)', w) : null,
+      kind === 'duration' ? field('Seconds', d) : field('Reps', r),
+      el('div', { class: 'stack' }, f),
+      kind === 'weight_reps'
+        ? btn('Swap these two', () => { const a = w.value; w.value = r.value; r.value = a; }, 'block small')
+        : null,
+      el('div', { class: 'sheet-actions' },
+        btn('Delete', () => {
+          close();
+          confirmSheet('Delete this set?',
+            `${toDayKey(new Date(s.completedAt))}, set ${s.setIndex}. This removes it from your history.`,
+            async () => { await removeSet(s.id); toast('Set deleted'); refresh(); }, 'Delete');
+        }, 'danger'),
+        btn('Save', async () => {
+          await correctSet(s.id, {
+            weight: w.value === '' ? null : parseFloat(w.value),
+            reps: r.value === '' ? null : parseInt(r.value, 10),
+            durationSec: d.value === '' ? null : parseInt(d.value, 10),
+            toFailure: fail,
+          });
+          close(); toast('Corrected'); refresh();
+        }, 'primary')),
+    ];
+  });
+}
+
+function splitSheet(exercise, brk, movingCount, refresh) {
+  sheet('Split history', (close) => {
+    const name = textInput({ placeholder: 'What was it before?' });
+    return [
+      el('p', { class: 'muted small' },
+        `"${exercise.name}" jumps from ${r1(brk.from.weight)} lb on ${brk.from.day} to `
+        + `${r1(brk.to.weight)} lb on ${brk.to.day}.`),
+      el('p', { class: 'muted small' },
+        `Splitting moves the ${movingCount} sets on or before ${brk.from.day} to a new exercise you `
+        + `name below. "${exercise.name}" keeps its recent sets, because the name describes what you `
+        + 'do now. The older one is archived, so it stays out of pickers but keeps its charts.'),
+      field('Name for the older movement', name,
+        'Whatever it actually was. If you cannot remember, '
+        + `"${exercise.name} (before ${brk.to.day})" works.`),
+      el('div', { class: 'sheet-actions' },
+        btn('Cancel', close),
+        btn('Split', async () => {
+          const n = name.value.trim();
+          if (!n) return toast('Name the older movement');
+          const res = await splitExerciseHistory({
+            exerciseId: exercise.id, throughDayKey: brk.from.day, newName: n,
+          });
+          close();
+          toast(`${res.moved} sets moved to "${n}"`);
+          refresh();
+        }, 'primary')),
+    ];
+  });
 }

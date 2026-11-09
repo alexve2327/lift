@@ -169,7 +169,14 @@ async function exerciseBlock({ exercise, programExercise, sets, session, setting
   // quietly carries over your right-side numbers.
   const sameSide = unilateral ? sets.filter((s) => s.side === side) : sets;
   const priorSame = unilateral && prior ? prior.filter((s) => s.side === side) : prior;
-  const seed = sameSide[sameSide.length - 1] ?? priorSame?.[priorSame.length - 1] ?? {};
+  // Fall back to any prior set when there is none on this side. Sets logged
+  // before per-side tracking was turned on have no side, and without this the
+  // prefill would go blank the first time you use a newly unilateral exercise.
+  const seed = sameSide[sameSide.length - 1]
+    ?? priorSame?.[priorSame.length - 1]
+    ?? sets[sets.length - 1]
+    ?? prior?.[prior.length - 1]
+    ?? {};
 
   const weightIn = numInput({ value: seed.weight ?? '', placeholder: 'lb', class: 'set-in' });
   const repsIn   = numInput({ value: seed.reps ?? '', placeholder: 'reps', class: 'set-in' });
@@ -225,16 +232,23 @@ async function exerciseBlock({ exercise, programExercise, sets, session, setting
     refresh();
   };
 
-  const target = programExercise
-    ? `${programExercise.targetSets} × ${programExercise.targetRepsLow}-${programExercise.targetRepsHigh}`
-    : null;
+  // Targets come from the exercise now, so the pill matches whatever you set in
+  // the edit sheet, program day or not.
+  const tSets = exercise.targetSets ?? programExercise?.targetSets ?? null;
+  const tLow = exercise.targetRepsLow ?? 8;
+  const tHigh = exercise.targetRepsHigh ?? 12;
+  const target = tSets ? `${tSets} \u00d7 ${tLow}-${tHigh}` : `${tLow}-${tHigh}`;
 
   const fmtSet = (s) => (kind === 'duration' ? `${s.durationSec}s`
     : kind === 'bodyweight_reps' ? `${s.reps}` : `${r1(s.weight)}×${s.reps}`);
+  const priorL = prior?.filter((s) => s.side === 'left') ?? [];
+  const priorR = prior?.filter((s) => s.side === 'right') ?? [];
   const priorLabel = prior?.length
-    ? (unilateral
-        ? 'Last: L ' + (prior.filter((s) => s.side === 'left').map(fmtSet).join(', ') || '--')
-          + '  ·  R ' + (prior.filter((s) => s.side === 'right').map(fmtSet).join(', ') || '--')
+    ? (unilateral && (priorL.length || priorR.length)
+        ? 'Last: L ' + (priorL.map(fmtSet).join(', ') || '\u2014')
+          + '  \u00b7  R ' + (priorR.map(fmtSet).join(', ') || '\u2014')
+        // Unilateral but no sided history yet: show the unsided sets rather
+        // than two empty lists.
         : 'Last: ' + prior.map(fmtSet).join(', '))
     : 'First time logging this';
 

@@ -56,6 +56,35 @@ db.version(2).stores({
   await tx.table('settings').toCollection().modify((s) => { s.schemaVersion = 2; });
 });
 
+// --- version 3: rep targets move onto the Exercise --------------------------
+//
+// v0.1 put targets on ProgramExercise, the day+exercise pairing, so squat could
+// be 5x5 on one day and 3x12 on another. That was right in the abstract and
+// wrong in practice: there is one program, each exercise appears once, and
+// having to open the program builder to change a rep range meant nobody ever
+// did. The result was all 26 exercises sitting on the 8-12 default.
+//
+// The rep range also IS a property of the movement, not the day. "Bumps at 10"
+// is what makes something a compound. So it lives on the Exercise now, edited
+// wherever you can see the exercise, including mid-workout.
+//
+// ProgramExercise keeps rest and ordering, which really are per-day.
+db.version(3).stores({}).upgrade(async (tx) => {
+  const pes = await tx.table('programExercises').toArray();
+  const byExercise = new Map();
+  for (const pe of pes) byExercise.set(pe.exerciseId, pe);
+  await tx.table('exercises').toCollection().modify((e) => {
+    const pe = byExercise.get(e.id);
+    e.targetSets     = e.targetSets     ?? pe?.targetSets     ?? 3;
+    e.targetRepsLow  = e.targetRepsLow  ?? pe?.targetRepsLow  ?? 8;
+    e.targetRepsHigh = e.targetRepsHigh ?? pe?.targetRepsHigh ?? 12;
+    // Your rule: bump when the FIRST TWO sets at the working weight hit the top
+    // of the range. Editable per exercise in case that ever changes.
+    e.bumpAfterSets  = e.bumpAfterSets  ?? 2;
+  });
+  await tx.table('settings').toCollection().modify((s) => { s.schemaVersion = 3; });
+});
+
 // [exerciseId+completedAt] is the important index. It turns "every squat set
 // ever, in date order" into one indexed range scan instead of a full table
 // scan plus a sort. At 3 sets x 6 exercises x 5 days a week you cross 5,000
@@ -74,7 +103,7 @@ export const DEFAULT_SETTINGS = {
   birthDate: null,      // "1994-03-08"; age is computed, never stored
   sex: null,            // only an input to the BMR equation
   activityFactor: null,
-  schemaVersion: 2,
+  schemaVersion: 3,
 };
 
 export async function getSettings() {
@@ -322,7 +351,35 @@ export async function importBackup(json) {
       await t.bulkAdd(rows);
     }
   });
+  await normalizeImported();
   await repairMealLinks();
+}
+
+/** Bring imported rows up to the current shape.
+ *
+ *  IndexedDB's own version upgrades run once, when the database opens. A backup
+ *  restore happens long after that and writes rows in whatever shape they had
+ *  when the backup was taken, so a v1 export dropped into a v3 database leaves
+ *  old-shaped rows behind an up-to-date version number. The upgrade will never
+ *  run again to fix them.
+ *
+ *  So every import re-applies the same backfills the upgrades do. The reading
+ *  code defaults missing fields anyway, which is why this is invisible until
+ *  you edit one exercise and it saves values the others do not have. */
+export async function normalizeImported() {
+  const pes = await db.programExercises.toArray();
+  const byExercise = new Map();
+  for (const pe of pes) byExercise.set(pe.exerciseId, pe);
+
+  await db.exercises.toCollection().modify((e) => {
+    const pe = byExercise.get(e.id);
+    e.targetSets     = e.targetSets     ?? pe?.targetSets     ?? 3;
+    e.targetRepsLow  = e.targetRepsLow  ?? pe?.targetRepsLow  ?? 8;
+    e.targetRepsHigh = e.targetRepsHigh ?? pe?.targetRepsHigh ?? 12;
+    e.bumpAfterSets  = e.bumpAfterSets  ?? 2;
+    e.isUnilateral   = e.isUnilateral   ?? false;
+  });
+  await db.settings.toCollection().modify((s) => { s.schemaVersion = 3; });
 }
 
 /** Restoring a backup replaces `foods` wholesale. A backup taken before meals
@@ -354,27 +411,29 @@ export async function repairMealLinks() {
 // ---------------------------------------------------------------------------
 
 async function seedExercises() {
-  const mk = (name, muscleGroup, equipment, trackingType = 'weight_reps') => ({
+  const mk = (name, muscleGroup, equipment, trackingType = 'weight_reps',
+              low = 8, high = 12, sets = 3) => ({
     id: uuid(), name, muscleGroup, equipment, trackingType,
+    targetSets: sets, targetRepsLow: low, targetRepsHigh: high, bumpAfterSets: 2,
     notes: '', isArchived: false,
   });
   await db.exercises.bulkAdd([
-    mk('Barbell Back Squat', 'Legs', 'Barbell'),
-    mk('Barbell Bench Press', 'Chest', 'Barbell'),
-    mk('Conventional Deadlift', 'Back', 'Barbell'),
-    mk('Overhead Press', 'Shoulders', 'Barbell'),
-    mk('Barbell Row', 'Back', 'Barbell'),
-    mk('Romanian Deadlift', 'Legs', 'Barbell'),
-    mk('Incline Dumbbell Press', 'Chest', 'Dumbbell'),
-    mk('Lat Pulldown', 'Back', 'Cable'),
-    mk('Seated Cable Row', 'Back', 'Cable'),
-    mk('Leg Press', 'Legs', 'Machine'),
+    mk('Barbell Back Squat', 'Legs', 'Barbell', 'weight_reps', 8, 10, 4),
+    mk('Barbell Bench Press', 'Chest', 'Barbell', 'weight_reps', 8, 10, 4),
+    mk('Conventional Deadlift', 'Back', 'Barbell', 'weight_reps', 8, 10, 4),
+    mk('Overhead Press', 'Shoulders', 'Barbell', 'weight_reps', 8, 10, 4),
+    mk('Barbell Row', 'Back', 'Barbell', 'weight_reps', 8, 10, 4),
+    mk('Romanian Deadlift', 'Legs', 'Barbell', 'weight_reps', 8, 10, 4),
+    mk('Incline Dumbbell Press', 'Chest', 'Dumbbell', 'weight_reps', 8, 10, 4),
+    mk('Lat Pulldown', 'Back', 'Cable', 'weight_reps', 8, 10, 4),
+    mk('Seated Cable Row', 'Back', 'Cable', 'weight_reps', 8, 10, 4),
+    mk('Leg Press', 'Legs', 'Machine', 'weight_reps', 8, 10, 4),
     mk('Leg Curl', 'Legs', 'Machine'),
     mk('Dumbbell Lateral Raise', 'Shoulders', 'Dumbbell'),
     mk('Cable Tricep Pushdown', 'Arms', 'Cable'),
     mk('Dumbbell Curl', 'Arms', 'Dumbbell'),
-    mk('Pull-Up', 'Back', 'Bodyweight', 'bodyweight_reps'),
-    mk('Dip', 'Chest', 'Bodyweight', 'bodyweight_reps'),
+    mk('Pull-Up', 'Back', 'Bodyweight', 'bodyweight_reps', 8, 10, 4),
+    mk('Dip', 'Chest', 'Bodyweight', 'bodyweight_reps', 8, 10, 4),
     mk('Plank', 'Core', 'Bodyweight', 'duration'),
     mk('Hanging Leg Raise', 'Core', 'Bodyweight', 'bodyweight_reps'),
   ]);
@@ -542,4 +601,104 @@ export async function logBodyweight(weight, dayKey = toDayKey()) {
   const id = uuid();
   await db.bodyweightEntries.add({ id, dayKey, weight, loggedAt: new Date() });
   return id;
+}
+
+// ---------------------------------------------------------------------------
+// HISTORY REPAIR
+// ---------------------------------------------------------------------------
+// Logged history is written once and not rewritten casually. But "not casually"
+// is not "never": renaming an exercise in place put two different movements
+// behind one id, and a typo is a typo. These are the deliberate, explicit,
+// user-initiated corrections, and every one of them stamps editedAt so a
+// corrected row never passes as an original.
+
+/** Split one exercise's history in two at a date.
+ *
+ *  The CURRENT exercise keeps its name and its recent sets, because the name
+ *  describes what you do now. A new exercise is created for everything on or
+ *  before `throughDayKey`, which is the movement that used to live under that
+ *  name. That is the right way round: you renamed it because the new thing is
+ *  what you are doing.
+ *
+ *  Day comparison is on LOCAL dates, matching how the charts group. */
+export async function splitExerciseHistory({ exerciseId, throughDayKey, newName }) {
+  const source = await db.exercises.get(exerciseId);
+  if (!source) throw new Error('exercise not found');
+
+  const all = await historyFor(exerciseId);
+  const moving = all.filter((s) => toDayKey(new Date(s.completedAt)) <= throughDayKey);
+  if (!moving.length) return { moved: 0, newExerciseId: null };
+
+  const newId = uuid();
+  await db.transaction('rw', db.exercises, db.setEntries, async () => {
+    await db.exercises.add({
+      ...source,
+      id: newId,
+      name: newName,
+      // Archived on creation: this is history, not something you are still
+      // programming. It stays out of pickers and keeps its charts.
+      isArchived: true,
+      notes: (source.notes ? source.notes + '\n' : '')
+        + `Split from "${source.name}" on ${toDayKey()}: sets through ${throughDayKey}.`,
+    });
+    await db.setEntries.bulkUpdate(moving.map((s) => ({
+      key: s.id,
+      changes: { exerciseId: newId, editedAt: new Date() },
+    })));
+  });
+  return { moved: moving.length, newExerciseId: newId };
+}
+
+/** Swap weight and reps on specific sets. For entries typed into the wrong
+ *  fields (7 lb x 100 reps). Explicit and per-set: the charts flag these but
+ *  never swap them on their own, because a chart that silently corrects your
+ *  data cannot be used to catch your own mistakes. */
+export async function swapWeightReps(setIds) {
+  const rows = await db.setEntries.bulkGet(setIds);
+  const good = rows.filter(Boolean);
+  await db.setEntries.bulkUpdate(good.map((s) => ({
+    key: s.id,
+    changes: { weight: s.reps, reps: s.weight, editedAt: new Date() },
+  })));
+  return good.length;
+}
+
+/** One exercise's history grouped by session, newest first, for the editor. */
+export async function sessionsForExercise(exerciseId) {
+  const sets = await historyFor(exerciseId);
+  const bySession = new Map();
+  for (const s of sets) {
+    if (!bySession.has(s.sessionId)) bySession.set(s.sessionId, []);
+    bySession.get(s.sessionId).push(s);
+  }
+  const sessions = await db.sessions.bulkGet([...bySession.keys()]);
+  const out = [];
+  [...bySession.entries()].forEach(([id, rows], i) => {
+    const sess = sessions[i];
+    rows.sort((a, b) => a.setIndex - b.setIndex || +new Date(a.completedAt) - +new Date(b.completedAt));
+    out.push({
+      sessionId: id,
+      dayKey: sess?.dayKey ?? toDayKey(new Date(rows[0].completedAt)),
+      dayName: sess?.dayNameSnapshot ?? 'Workout',
+      sets: rows,
+    });
+  });
+  out.sort((a, b) => b.dayKey.localeCompare(a.dayKey));
+  return out;
+}
+
+/** Correct or delete one past set. Both stamp the session as edited too, so a
+ *  workout that was touched afterwards says so. */
+export async function correctSet(setId, patch) {
+  const s = await db.setEntries.get(setId);
+  if (!s) return;
+  await db.setEntries.update(setId, { ...patch, editedAt: new Date() });
+  await db.sessions.update(s.sessionId, { editedAt: new Date() });
+}
+
+export async function removeSet(setId) {
+  const s = await db.setEntries.get(setId);
+  if (!s) return;
+  await db.setEntries.delete(setId);
+  await db.sessions.update(s.sessionId, { editedAt: new Date() });
 }

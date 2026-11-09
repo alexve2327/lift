@@ -197,7 +197,7 @@ function dayCard(day, byId, refresh) {
             el('div', {},
               el('div', { class: 'list-title' }, byId[pe.exerciseId]?.name ?? 'Unknown'),
               el('div', { class: 'list-sub' },
-                `${pe.targetSets} × ${pe.targetRepsLow}-${pe.targetRepsHigh} · rest ${pe.targetRestSec}s`
+                `rest ${pe.targetRestSec}s \u00b7 targets on the exercise`
                 + (pe.notes ? ` · ${pe.notes}` : ''))),
             el('span', { class: 'chev' }, '›'))))
       : el('p', { class: 'muted small' }, 'No exercises yet.'),

@@ -510,3 +510,11 @@ input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 
 .quick-row .btn { flex-shrink: 0; }
 .trend-note { font-size: 0.8rem; color: var(--muted); }
 .trend-note b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ---------- session history list ---------- */
+.session-block { border-top: 1px solid var(--rule); padding-top: 8px; }
+.session-block:first-child { border-top: none; padding-top: 0; }
+.session-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+.session-head .list-title { font-size: 0.88rem; font-variant-numeric: tabular-nums; }
+.set-row.tappable { cursor: pointer; }
+.set-row .chev { margin-left: auto; }

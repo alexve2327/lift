@@ -8,7 +8,7 @@
 
 import { db } from './db.js';
 import {
-  el, btn, sheet, confirmSheet, toast, field, textInput, segmented,
+  el, btn, sheet, confirmSheet, toast, field, textInput, numInput, segmented,
 } from './ui.js';
 import { uuid } from './util.js';
 
@@ -46,6 +46,38 @@ export function exerciseSheet(existing, onDone, { allowArchive = true } = {}) {
     // Unilateral: one arm or leg at a time. Turning it on makes the set form
     // ask which side, and the progress charts can then separate them, which is
     // the whole point — a left/right imbalance is invisible in a merged line.
+    // Targets live here now, not in the program builder, because this is the
+    // screen you can actually reach mid-workout. The rep range is also what
+    // decides compound vs isolation: a range topping out at 10 is a compound.
+    const tSets = numInput({ value: e.targetSets ?? 3 });
+    const tLow  = numInput({ value: e.targetRepsLow ?? 8 });
+    const tHigh = numInput({ value: e.targetRepsHigh ?? 12 });
+    const tBump = numInput({ value: e.bumpAfterSets ?? 2 });
+
+    const ruleLine = el('span', { class: 'field-hint' });
+    const updateRule = () => {
+      const hi = parseInt(tHigh.value, 10);
+      const n = parseInt(tBump.value, 10);
+      ruleLine.textContent = Number.isFinite(hi) && Number.isFinite(n)
+        ? `Progress will say "ready to bump" once your first ${n} set${n === 1 ? '' : 's'} `
+          + `at the working weight hit ${hi} reps.`
+        : 'Set a rep range and a set count.';
+    };
+    for (const i of [tHigh, tBump]) i.addEventListener('input', updateRule);
+    updateRule();
+
+    const presets = el('div', { class: 'stack' },
+      segmented([
+        { value: 'compound', label: 'Compound 8-10' },
+        { value: 'iso', label: 'Isolation 10-12' },
+      ], (parseInt(tHigh.value, 10) === 10 ? 'compound'
+         : parseInt(tHigh.value, 10) === 12 ? 'iso' : null),
+      (v) => {
+        tLow.value = v === 'compound' ? 8 : 10;
+        tHigh.value = v === 'compound' ? 10 : 12;
+        updateRule();
+      }));
+
     let unilateral = !!e.isUnilateral;
     const uniBtn = el('button', {
       type: 'button', class: 'fail-btn wide' + (unilateral ? ' on' : ''),
@@ -69,6 +101,16 @@ export function exerciseSheet(existing, onDone, { allowArchive = true } = {}) {
         el('span', { class: 'field-hint' },
           'For single-arm rows, split squats, one-leg curls. Each set records which side, '
           + 'and Progress can chart left and right separately.')),
+      el('div', { class: 'stack' },
+        el('span', { class: 'field-label' }, 'Targets'),
+        presets,
+        el('div', { class: 'grid-2' },
+          field('Sets', tSets),
+          field('Bump after', tBump, 'sets at the top')),
+        el('div', { class: 'grid-2' },
+          field('Reps from', tLow),
+          field('Reps to', tHigh)),
+        ruleLine),
       field('Notes', notes),
       el('div', { class: 'sheet-actions' },
         existing && allowArchive
@@ -82,13 +124,21 @@ export function exerciseSheet(existing, onDone, { allowArchive = true } = {}) {
           : btn('Cancel', close),
         btn('Save', async () => {
           if (!name.value.trim()) return toast('Name it');
+          const num = (i, d) => { const v = parseInt(i.value, 10); return Number.isFinite(v) ? v : d; };
+          const low = num(tLow, 8);
+          const high = Math.max(num(tHigh, 12), low);
           await db.exercises.put({
+            ...e,
             id: e.id ?? uuid(),
             name: name.value.trim(),
             muscleGroup: group.value.trim(),
             equipment: equip.value.trim(),
             trackingType: tracking,
             isUnilateral: unilateral,
+            targetSets: num(tSets, 3),
+            targetRepsLow: low,
+            targetRepsHigh: high,
+            bumpAfterSets: Math.max(1, num(tBump, 2)),
             notes: notes.value,
             isArchived: false,
           });
