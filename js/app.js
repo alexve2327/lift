@@ -8,12 +8,14 @@ import * as timer from './timer.js';
 
 import * as today from './views/today.js';
 import * as food from './views/food.js';
+import * as progress from './views/progress.js';
 import * as library from './views/library.js';
 import * as settings from './views/settings.js';
 
 const VIEWS = {
   today:    { module: today,    label: 'Train',    icon: '▲' },
   food:     { module: food,     label: 'Food',     icon: '●' },
+  progress: { module: progress, label: 'Progress', icon: '↗' },
   library:  { module: library,  label: 'Library',  icon: '≡' },
   settings: { module: settings, label: 'Settings', icon: '⚙' },
 };

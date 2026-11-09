@@ -85,11 +85,34 @@ export const textInput = (props = {}) =>
 export function sheet(title, buildBody) {
   const backdrop = el('div', { class: 'backdrop' });
   const close = () => { backdrop.remove(); document.body.classList.remove('locked'); };
+  // The body builder may be async (some sheets read the database before they
+  // can render). Render a placeholder, then swap in the real body: appending a
+  // Promise would otherwise stringify it into the sheet as "[object Promise]".
+  const body = el('div', { class: 'sheet-body' });
   const panel = el('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true' },
     el('div', { class: 'sheet-head' },
       el('h2', {}, title),
       el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Close', onclick: close }, '×')),
-    el('div', { class: 'sheet-body' }, buildBody(close)));
+    body);
+
+  const built = buildBody(close);
+  if (built && typeof built.then === 'function') {
+    body.append(el('p', { class: 'muted small' }, 'Loading…'));
+    built.then((nodes) => {
+      clear(body);
+      for (const n of [nodes].flat(Infinity)) {
+        if (n === null || n === undefined || n === false) continue;
+        body.append(n instanceof Node ? n : document.createTextNode(String(n)));
+      }
+      requestAnimationFrame(() => panel.querySelector('input, select, textarea')?.focus());
+    });
+  } else {
+    for (const n of [built].flat(Infinity)) {
+      if (n === null || n === undefined || n === false) continue;
+      body.append(n instanceof Node ? n : document.createTextNode(String(n)));
+    }
+  }
+
   backdrop.append(panel);
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
   document.body.append(backdrop);
@@ -99,12 +122,22 @@ export function sheet(title, buildBody) {
   return close;
 }
 
-export function confirmSheet(title, message, onConfirm) {
+/** Confirmation sheet.
+ *
+ *  `confirmLabel` is REQUIRED and deliberately has no default. The previous
+ *  version defaulted it to "Delete" with danger styling, so the button that
+ *  SAVED a finished workout was red and said Delete. A confirm button must name
+ *  the action it performs, and a default label is exactly how that rule gets
+ *  broken across every call site at once. It throws rather than guessing.
+ *
+ *  `kind`: 'danger' for destructive, 'primary' for constructive. */
+export function confirmSheet(title, message, onConfirm, confirmLabel, kind = 'danger') {
+  if (!confirmLabel) throw new Error('confirmSheet needs an explicit confirmLabel');
   sheet(title, (close) => [
     el('p', { class: 'muted' }, message),
     el('div', { class: 'sheet-actions' },
       btn('Cancel', close),
-      btn('Delete', () => { close(); onConfirm(); }, 'danger')),
+      btn(confirmLabel, () => { close(); onConfirm(); }, kind)),
   ]);
 }
 

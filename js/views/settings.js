@@ -2,17 +2,18 @@
 
 import {
   db, getSettings, saveSettings, exportBackup, importBackup, dayTotals,
+  bodyweightSeries, logBodyweight,
 } from '../db.js';
 import {
   el, screen, card, btn, field, numInput, textInput, segmented, toast,
   sheet, confirmSheet, stat,
 } from '../ui.js';
-import { uuid, toDayKey, ageFrom, bmr, r0, r1 } from '../util.js';
+import { toDayKey, fromDayKey, ageFrom, bmr, r0, r1 } from '../util.js';
+import { lineChart, trend } from '../chart.js';
 
 export async function render(refresh) {
   const s = await getSettings();
-  const weights = await db.bodyweightEntries.toArray();
-  weights.sort((a, b) => a.dayKey.localeCompare(b.dayKey));
+  const weights = await bodyweightSeries();
   const latest = weights[weights.length - 1] ?? null;
 
   const age = ageFrom(s.birthDate);
@@ -26,12 +27,7 @@ export async function render(refresh) {
 
   return screen('Settings', null,
 
-    card(
-      el('h2', { class: 'card-title' }, 'Bodyweight'),
-      el('div', { class: 'stat-row' },
-        stat(latest ? `${r1(latest.weight)}` : '—', 'lb'),
-        stat(latest ? latest.dayKey : 'no entries', 'last weigh-in')),
-      btn('Log weight', () => weightSheet(refresh), 'primary block')),
+    bodyweightCard(weights, latest, refresh),
 
     card(
       el('h2', { class: 'card-title' }, 'Profile'),
@@ -130,31 +126,6 @@ function restForm(s, refresh) {
     }, 'block'));
 }
 
-function weightSheet(refresh) {
-  sheet('Log bodyweight', (close) => {
-    const w = numInput({ placeholder: 'lb', class: 'big-in' });
-    const day = el('input', { type: 'date', value: toDayKey() });
-    return [
-      field('Weight (lb)', w),
-      field('Date', day, 'One entry per day. Logging the same day again replaces it.'),
-      el('div', { class: 'sheet-actions' },
-        btn('Cancel', close),
-        btn('Save', async () => {
-          const v = parseFloat(w.value);
-          if (!Number.isFinite(v)) return toast('Enter a weight');
-          const key = day.value || toDayKey();
-          const existing = await db.bodyweightEntries.where('dayKey').equals(key).first();
-          if (existing) {
-            await db.bodyweightEntries.update(existing.id, { weight: v, loggedAt: new Date() });
-          } else {
-            await db.bodyweightEntries.add({ id: uuid(), dayKey: key, weight: v, loggedAt: new Date() });
-          }
-          close(); toast('Logged'); refresh();
-        }, 'primary')),
-    ];
-  });
-}
-
 async function downloadBackup() {
   const blob = await exportBackup();
   const url = URL.createObjectURL(blob);
@@ -189,8 +160,72 @@ function restoreSheet(refresh) {
               toast('Could not read that file');
               console.error(err);
             }
-          });
+          }, 'Replace everything');
         }, 'danger')),
     ];
   });
+}
+
+// ---------------------------------------------------------------------------
+// Bodyweight: one field, one button, and a chart
+// ---------------------------------------------------------------------------
+// The old version hid logging behind a sheet with two fields, which for a
+// number you type once a morning is three taps too many. The input is now on
+// the card itself and defaults to today.
+
+function bodyweightCard(weights, latest, refresh) {
+  const input = numInput({
+    placeholder: latest ? r1(latest.weight) : 'lb',
+    class: 'big-in', 'aria-label': 'Bodyweight in pounds',
+  });
+
+  const save = async () => {
+    const v = parseFloat(input.value);
+    if (!Number.isFinite(v) || v <= 0) return toast('Enter a weight');
+    await logBodyweight(v);
+    toast(weights.some((w) => w.dayKey === toDayKey()) ? "Today's weight updated" : 'Logged');
+    refresh();
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+
+  const pts = weights.map((w) => ({ x: fromDayKey(w.dayKey), y: w.weight, dayKey: w.dayKey }));
+  const tr = trend(pts);
+
+  // 7-day moving average smooths out the day-to-day water noise that makes a
+  // raw bodyweight line almost unreadable over a few weeks.
+  const smooth = pts.map((p, i) => {
+    const win = pts.slice(Math.max(0, i - 6), i + 1);
+    return win.reduce((a, q) => a + q.y, 0) / win.length;
+  });
+
+  const change = pts.length > 1 ? pts[pts.length - 1].y - pts[0].y : null;
+
+  return card(
+    el('h2', { class: 'card-title' }, 'Bodyweight'),
+    el('div', { class: 'stat-row' },
+      stat(latest ? r1(latest.weight) : '—', 'lb'),
+      stat(change === null ? '—' : (change >= 0 ? '+' : '') + r1(change), 'lb total'),
+      stat(tr ? (tr.perWeek >= 0 ? '+' : '') + r1(tr.perWeek) : '—', 'lb/week')),
+    el('div', { class: 'quick-row' },
+      input,
+      btn('Log today', save, 'primary')),
+    pts.length >= 2
+      ? el('div', { class: 'stack' },
+          lineChart({
+            points: pts.map((p, i) => ({
+              x: p.x, y: p.y,
+              label: `${p.dayKey} · ${r1(p.y)} lb` + (i >= 6 ? ` · 7-day avg ${r1(smooth[i])}` : ''),
+            })),
+            height: 200,
+            yLabel: 'lb',
+            rules: tr ? [{ y: tr.at(+pts[pts.length - 1].x), label: 'trend' }] : [],
+          }),
+          tr
+            ? el('p', { class: 'trend-note' },
+                'Trend: ', el('b', {}, `${tr.perWeek >= 0 ? '+' : ''}${r1(tr.perWeek)} lb/week`),
+                ` over ${pts.length} weigh-ins. A single day means nothing here; the slope is the signal.`)
+            : null)
+      : el('p', { class: 'muted small' },
+          'Log a few more days and a trend chart appears here. Weight swings a couple of pounds '
+          + 'on water alone, so single readings are noise.'));
 }
